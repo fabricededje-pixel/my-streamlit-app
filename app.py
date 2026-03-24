@@ -10,7 +10,7 @@ from core.themes import THEMES
 from core.preview import render_cv_preview
 
 from exporters.json_store import save_profile_to_json, load_profile_from_json
-from exporters.pdf_exporter import convert_docx_to_pdf
+from exporters.pdf_exporter import convert_docx_to_pdf, is_pdf_export_supported
 
 from templates.classic import build_classic_cv
 from templates.modern import build_modern_cv
@@ -519,17 +519,20 @@ if generate_clicked:
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
-        try:
-            pdf_path = convert_docx_to_pdf(docx_path)
-            with open(pdf_path, "rb") as f:
-                st.download_button(
-                    tr(language, "download_pdf"),
-                    data=f,
-                    file_name=os.path.basename(pdf_path),
-                    mime="application/pdf",
-                )
-        except Exception as e:
-            st.warning(f"PDF konnte nicht erstellt werden: {e}")
+        if is_pdf_export_supported():
+            try:
+                pdf_path = convert_docx_to_pdf(docx_path)
+                with open(pdf_path, "rb") as f:
+                    st.download_button(
+                        tr(language, "download_pdf"),
+                        data=f,
+                        file_name=os.path.basename(pdf_path),
+                        mime="application/pdf",
+                    )
+            except Exception as e:
+                st.warning(f"PDF konnte nicht erstellt werden: {e}")
+        else:
+            st.info("PDF-Export ist in der Cloud nicht verfuegbar. Bitte nutze den DOCX-Download.")
 
 if save_json_clicked:
     os.makedirs("output", exist_ok=True)
