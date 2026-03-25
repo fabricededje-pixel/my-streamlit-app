@@ -1,23 +1,41 @@
+import json
 import os
+import re
+from dataclasses import asdict
+from datetime import datetime
+
 import streamlit as st
 import streamlit.components.v1 as components
 
-from core.profile_model import CVProfile, ExperienceEntry, EducationEntry, SkillEntry
+from core.i18n import tr
+from core.preview import render_cv_preview
+from core.profile_model import (
+    CVProfile,
+    CertificateEntry,
+    EducationEntry,
+    ExperienceEntry,
+    LanguageEntry,
+    ProjectEntry,
+    SkillEntry,
+)
+from core.themes import THEMES
+from core.translator import TRANSLATION_LANGUAGES, language_label
 from core.utils import split_lines
 from core.validators import validate_profile
-from core.i18n import tr
-from core.themes import THEMES
-from core.preview import render_cv_preview
-
-from exporters.json_store import save_profile_to_json, load_profile_from_json
+from exporters.document_payload import (
+    embed_profile_in_docx,
+    embed_profile_in_pdf,
+    extract_profile_from_docx,
+    extract_profile_from_pdf,
+)
+from exporters.json_store import load_profile_from_json, profile_from_data, profile_to_dict
 from exporters.pdf_exporter import convert_docx_to_pdf, is_pdf_export_supported
-
-from templates.classic import build_classic_cv
-from templates.modern import build_modern_cv
-from templates.compact import build_compact_cv
 from templates.ats import build_ats_cv
-from templates.photo_classic import build_photo_classic_cv
+from templates.classic import build_classic_cv
+from templates.compact import build_compact_cv
 from templates.german_premium import build_german_premium_cv
+from templates.modern import DEFAULT_MODERN_COLORS, build_modern_cv
+from templates.photo_classic import build_photo_classic_cv
 
 
 TEMPLATES = {
@@ -36,6 +54,35 @@ SKILL_LEVELS = [
     "Expertenkenntnisse",
 ]
 
+LANGUAGE_LEVELS = [
+    "Grundkenntnisse",
+    "Gute Kenntnisse",
+    "Sehr gute Kenntnisse",
+    "Fließend",
+    "Verhandlungssicher",
+    "Muttersprache",
+    "C1",
+    "C2",
+]
+
+UI_LANGUAGES = ["de", "en", "fr"]
+TRANSLATION_CODES = list(TRANSLATION_LANGUAGES.keys())
+MONTH_OPTIONS = {
+    "01": "Januar",
+    "02": "Februar",
+    "03": "März",
+    "04": "April",
+    "05": "Mai",
+    "06": "Juni",
+    "07": "Juli",
+    "08": "August",
+    "09": "September",
+    "10": "Oktober",
+    "11": "November",
+    "12": "Dezember",
+}
+YEAR_OPTIONS = [str(year) for year in range(datetime.now().year + 2, 1949, -1)]
+
 
 def get_dynamic_theme(theme: dict, template_name: str) -> dict:
     custom = dict(theme)
@@ -53,19 +100,17 @@ def get_dynamic_theme(theme: dict, template_name: str) -> dict:
 
 
 def inject_custom_css(theme: dict):
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <style>
     .stApp {{
         background:
-            radial-gradient(circle at 10% 10%, {theme["accent"]} 0%, transparent 25%),
-            radial-gradient(circle at 90% 15%, {theme["primary"]}22 0%, transparent 18%),
-            radial-gradient(circle at 80% 85%, {theme["accent"]} 0%, transparent 20%),
-            linear-gradient(135deg, {theme["bg"]} 0%, #ffffff 45%, {theme["accent"]}66 100%);
+            linear-gradient(145deg, rgba(255,255,255,0.94) 0%, rgba(248,250,252,0.98) 38%, rgba(241,245,249,1) 100%);
         background-attachment: fixed;
     }}
 
     .block-container {{
-        padding-top: 1.1rem;
+        padding-top: 2.2rem;
         padding-bottom: 2rem;
         max-width: 1600px;
         position: relative;
@@ -75,13 +120,12 @@ def inject_custom_css(theme: dict):
     .stApp::before {{
         content: "";
         position: fixed;
-        top: -120px;
-        left: -120px;
-        width: 340px;
-        height: 340px;
-        background: {theme["primary"]}18;
-        filter: blur(70px);
-        border-radius: 50%;
+        inset: 0;
+        background:
+            radial-gradient(circle at 12% 14%, {theme["accent"]}66 0%, transparent 26%),
+            radial-gradient(circle at 82% 18%, {theme["primary"]}14 0%, transparent 22%),
+            radial-gradient(circle at 78% 82%, {theme["accent"]}55 0%, transparent 24%);
+        opacity: 0.95;
         z-index: 0;
         pointer-events: none;
     }}
@@ -89,14 +133,14 @@ def inject_custom_css(theme: dict):
     .stApp::after {{
         content: "";
         position: fixed;
-        bottom: -140px;
-        right: -120px;
-        width: 380px;
-        height: 380px;
-        background: {theme["accent"]};
-        filter: blur(80px);
-        border-radius: 50%;
-        opacity: 0.7;
+        inset: 0;
+        background-image:
+            linear-gradient(rgba(148,163,184,0.06) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(148,163,184,0.06) 1px, transparent 1px);
+        background-size: 36px 36px;
+        mask-image: linear-gradient(to bottom, rgba(0,0,0,0.28), rgba(0,0,0,0.06));
+        -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,0.28), rgba(0,0,0,0.06));
+        opacity: 0.45;
         z-index: 0;
         pointer-events: none;
     }}
@@ -174,6 +218,8 @@ def inject_custom_css(theme: dict):
         margin-bottom: 0.2rem;
         color: {theme["secondary"]};
         letter-spacing: -0.02em;
+        line-height: 1.2;
+        padding-top: 0.2rem;
     }}
 
     .page-subtitle {{
@@ -188,20 +234,10 @@ def inject_custom_css(theme: dict):
         margin-bottom: 0.75rem;
         color: {theme["secondary"]};
     }}
-
-    .small-note {{
-        color: {theme["muted"]};
-        font-size: 0.9rem;
-    }}
-
-    hr {{
-        border: none;
-        border-top: 1px solid {theme["border"]};
-        margin-top: 1rem;
-        margin-bottom: 1rem;
-    }}
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 def save_uploaded_photo(uploaded_file):
@@ -212,10 +248,112 @@ def save_uploaded_photo(uploaded_file):
     ext = uploaded_file.name.split(".")[-1].lower()
     path = os.path.join("temp", f"uploaded_photo.{ext}")
 
-    with open(path, "wb") as f:
-        f.write(uploaded_file.read())
+    with open(path, "wb") as file_obj:
+        file_obj.write(uploaded_file.read())
 
     return path
+
+
+def parse_period_string(period: str):
+    text = (period or "").strip()
+    if not text:
+        return "", "", "", "", False
+
+    normalized = text.lower().replace("bis heute", "heute").replace("present", "heute").replace("current", "heute")
+    matches = re.findall(r"(\d{1,2})\s*/\s*(\d{4})", normalized)
+
+    start_month = ""
+    start_year = ""
+    end_month = ""
+    end_year = ""
+
+    if matches:
+        if len(matches) >= 1:
+            start_month, start_year = matches[0]
+            start_month = start_month.zfill(2)
+        if len(matches) >= 2:
+            end_month, end_year = matches[1]
+            end_month = end_month.zfill(2)
+
+    is_current = "heute" in normalized
+
+    year_matches = re.findall(r"\b(19\d{2}|20\d{2}|21\d{2})\b", normalized)
+    if not start_year and year_matches:
+        start_year = year_matches[0]
+    if not end_year and len(year_matches) > 1:
+        end_year = year_matches[1]
+
+    return start_month, start_year, end_month, end_year, is_current
+
+
+def set_period_state(prefix: str, index: int, period: str):
+    start_month, start_year, end_month, end_year, is_current = parse_period_string(period)
+    st.session_state[f"{prefix}_start_month_{index}"] = start_month
+    st.session_state[f"{prefix}_start_year_{index}"] = start_year
+    st.session_state[f"{prefix}_end_month_{index}"] = end_month
+    st.session_state[f"{prefix}_end_year_{index}"] = end_year
+    st.session_state[f"{prefix}_is_current_{index}"] = is_current
+
+
+def format_period(prefix: str, index: int) -> str:
+    start_month = (st.session_state.get(f"{prefix}_start_month_{index}", "") or "").strip()
+    start_year = (st.session_state.get(f"{prefix}_start_year_{index}", "") or "").strip()
+    end_month = (st.session_state.get(f"{prefix}_end_month_{index}", "") or "").strip()
+    end_year = (st.session_state.get(f"{prefix}_end_year_{index}", "") or "").strip()
+    is_current = bool(st.session_state.get(f"{prefix}_is_current_{index}", False))
+
+    start_part = ""
+    end_part = ""
+
+    if start_month and start_year:
+        start_part = f"{start_month}/{start_year}"
+    elif start_year:
+        start_part = start_year
+
+    if is_current:
+        end_part = "heute"
+    elif end_month and end_year:
+        end_part = f"{end_month}/{end_year}"
+    elif end_year:
+        end_part = end_year
+
+    if start_part and end_part:
+        return f"{start_part} - {end_part}"
+    if start_part:
+        return start_part
+    return end_part
+
+
+def render_period_selector(prefix: str, index: int, label: str):
+    st.markdown(f"**{label}**")
+    month_keys = [""] + list(MONTH_OPTIONS.keys())
+
+    start_col_1, start_col_2 = st.columns(2)
+    with start_col_1:
+        st.selectbox(
+            "Startmonat",
+            month_keys,
+            key=f"{prefix}_start_month_{index}",
+            format_func=lambda value: MONTH_OPTIONS.get(value, "") if value else "",
+        )
+    with start_col_2:
+        st.selectbox("Startjahr", [""] + YEAR_OPTIONS, key=f"{prefix}_start_year_{index}")
+
+    st.checkbox("Aktuell", key=f"{prefix}_is_current_{index}")
+
+    if not st.session_state.get(f"{prefix}_is_current_{index}", False):
+        end_col_1, end_col_2 = st.columns(2)
+        with end_col_1:
+            st.selectbox(
+                "Endmonat",
+                month_keys,
+                key=f"{prefix}_end_month_{index}",
+                format_func=lambda value: MONTH_OPTIONS.get(value, "") if value else "",
+            )
+        with end_col_2:
+            st.selectbox("Endjahr", [""] + YEAR_OPTIONS, key=f"{prefix}_end_year_{index}")
+
+    return format_period(prefix, index)
 
 
 def fill_session_from_profile(profile: CVProfile):
@@ -226,20 +364,20 @@ def fill_session_from_profile(profile: CVProfile):
     st.session_state["city"] = profile.city
     st.session_state["linkedin"] = profile.linkedin
     st.session_state["summary"] = profile.summary
-    st.session_state["languages_raw"] = "\n".join(profile.languages)
-    st.session_state["projects_raw"] = "\n".join(profile.projects)
-    st.session_state["certificates_raw"] = "\n".join(profile.certificates)
     st.session_state["photo_path"] = profile.photo_path
-    st.session_state["language"] = profile.language
+    st.session_state["cv_language"] = profile.language or "de"
 
     st.session_state["experience_count"] = max(1, len(profile.experience))
     st.session_state["education_count"] = max(1, len(profile.education))
     st.session_state["skill_count"] = max(1, len(profile.skills))
+    st.session_state["language_count"] = max(1, len(profile.languages))
+    st.session_state["project_count"] = max(1, len(profile.projects))
+    st.session_state["certificate_count"] = max(1, len(profile.certificates))
 
     for i, skill in enumerate(profile.skills):
         if hasattr(skill, "name"):
             st.session_state[f"skill_name_{i}"] = skill.name
-            st.session_state[f"skill_level_{i}"] = skill.level if skill.level else "Gute Kenntnisse"
+            st.session_state[f"skill_level_{i}"] = skill.level or "Gute Kenntnisse"
         else:
             st.session_state[f"skill_name_{i}"] = str(skill)
             st.session_state[f"skill_level_{i}"] = "Gute Kenntnisse"
@@ -248,12 +386,25 @@ def fill_session_from_profile(profile: CVProfile):
         st.session_state.setdefault(f"skill_name_{i}", "")
         st.session_state.setdefault(f"skill_level_{i}", "Gute Kenntnisse")
 
+    for i, language in enumerate(profile.languages):
+        if hasattr(language, "name"):
+            st.session_state[f"language_name_{i}"] = language.name
+            st.session_state[f"language_level_{i}"] = language.level or "Gute Kenntnisse"
+        else:
+            st.session_state[f"language_name_{i}"] = str(language)
+            st.session_state[f"language_level_{i}"] = "Gute Kenntnisse"
+
+    for i in range(len(profile.languages), max(st.session_state["language_count"], 1)):
+        st.session_state.setdefault(f"language_name_{i}", "")
+        st.session_state.setdefault(f"language_level_{i}", "Gute Kenntnisse")
+
     for i, exp in enumerate(profile.experience):
         st.session_state[f"exp_title_{i}"] = exp.title
         st.session_state[f"exp_company_{i}"] = exp.company
         st.session_state[f"exp_location_{i}"] = exp.location
         st.session_state[f"exp_period_{i}"] = exp.period
         st.session_state[f"exp_details_{i}"] = "\n".join(exp.details)
+        set_period_state("exp", i, exp.period)
 
     for i, edu in enumerate(profile.education):
         st.session_state[f"edu_degree_{i}"] = edu.degree
@@ -261,6 +412,49 @@ def fill_session_from_profile(profile: CVProfile):
         st.session_state[f"edu_location_{i}"] = edu.location
         st.session_state[f"edu_period_{i}"] = edu.period
         st.session_state[f"edu_details_{i}"] = "\n".join(edu.details)
+        set_period_state("edu", i, edu.period)
+
+    for i, project in enumerate(profile.projects):
+        if hasattr(project, "title"):
+            st.session_state[f"project_title_{i}"] = project.title
+            st.session_state[f"project_organization_{i}"] = project.organization
+            st.session_state[f"project_summary_{i}"] = project.summary
+            set_period_state("project", i, project.period)
+        else:
+            st.session_state[f"project_title_{i}"] = str(project)
+            st.session_state[f"project_organization_{i}"] = ""
+            st.session_state[f"project_summary_{i}"] = ""
+            set_period_state("project", i, "")
+
+    for i, certificate in enumerate(profile.certificates):
+        if hasattr(certificate, "title"):
+            st.session_state[f"certificate_title_{i}"] = certificate.title
+            st.session_state[f"certificate_issuer_{i}"] = certificate.issuer
+            st.session_state[f"certificate_summary_{i}"] = certificate.summary
+            set_period_state("certificate", i, certificate.period)
+        else:
+            st.session_state[f"certificate_title_{i}"] = str(certificate)
+            st.session_state[f"certificate_issuer_{i}"] = ""
+            st.session_state[f"certificate_summary_{i}"] = ""
+            set_period_state("certificate", i, "")
+
+    for i in range(len(profile.experience), max(st.session_state["experience_count"], 1)):
+        set_period_state("exp", i, "")
+
+    for i in range(len(profile.education), max(st.session_state["education_count"], 1)):
+        set_period_state("edu", i, "")
+
+    for i in range(len(profile.projects), max(st.session_state["project_count"], 1)):
+        st.session_state.setdefault(f"project_title_{i}", "")
+        st.session_state.setdefault(f"project_organization_{i}", "")
+        st.session_state.setdefault(f"project_summary_{i}", "")
+        set_period_state("project", i, "")
+
+    for i in range(len(profile.certificates), max(st.session_state["certificate_count"], 1)):
+        st.session_state.setdefault(f"certificate_title_{i}", "")
+        st.session_state.setdefault(f"certificate_issuer_{i}", "")
+        st.session_state.setdefault(f"certificate_summary_{i}", "")
+        set_period_state("certificate", i, "")
 
 
 st.set_page_config(page_title="CV Builder", layout="wide")
@@ -271,102 +465,161 @@ if "education_count" not in st.session_state:
     st.session_state.education_count = 1
 if "skill_count" not in st.session_state:
     st.session_state.skill_count = 1
-if "language" not in st.session_state:
-    st.session_state.language = "de"
+if "language_count" not in st.session_state:
+    st.session_state.language_count = 1
+if "project_count" not in st.session_state:
+    st.session_state.project_count = 1
+if "certificate_count" not in st.session_state:
+    st.session_state.certificate_count = 1
+if "ui_language" not in st.session_state:
+    st.session_state.ui_language = "de"
+if "cv_language" not in st.session_state:
+    st.session_state.cv_language = "de"
 if "photo_path" not in st.session_state:
     st.session_state.photo_path = ""
+if "modern_header_fill" not in st.session_state:
+    st.session_state.modern_header_fill = f"#{DEFAULT_MODERN_COLORS['header_fill']}"
+if "modern_sidebar_fill" not in st.session_state:
+    st.session_state.modern_sidebar_fill = f"#{DEFAULT_MODERN_COLORS['sidebar_fill']}"
+if "modern_border_fill" not in st.session_state:
+    st.session_state.modern_border_fill = f"#{DEFAULT_MODERN_COLORS['header_line']}"
+
+if "pending_loaded_profile" in st.session_state:
+    pending_profile = profile_from_data(st.session_state.pop("pending_loaded_profile"))
+    fill_session_from_profile(pending_profile)
 
 with st.sidebar:
     st.header("Einstellungen")
 
-    language = st.selectbox(
-        "Sprache / Language / Langue",
-        ["de", "en", "fr"],
-        index=["de", "en", "fr"].index(st.session_state.language),
-        key="language"
+    ui_language = st.selectbox(
+        tr(st.session_state.ui_language, "ui_language"),
+        UI_LANGUAGES,
+        index=UI_LANGUAGES.index(st.session_state.ui_language),
+        key="ui_language",
     )
 
-    template_name = st.selectbox(tr(language, "template"), list(TEMPLATES.keys()))
+    cv_language = st.selectbox(
+        tr(ui_language, "cv_language"),
+        TRANSLATION_CODES,
+        index=TRANSLATION_CODES.index(st.session_state.cv_language),
+        format_func=language_label,
+        key="cv_language",
+    )
+
+    template_name = st.selectbox(tr(ui_language, "template"), list(TEMPLATES.keys()))
     theme_name = st.selectbox("Farbschema", list(THEMES.keys()))
 
-theme = THEMES[theme_name]
-theme = get_dynamic_theme(theme, template_name)
+    if template_name == "Modern":
+        st.markdown("---")
+        st.subheader("Modern Farben")
+        st.color_picker("Header", key="modern_header_fill")
+        st.color_picker("Seitenleiste", key="modern_sidebar_fill")
+        st.color_picker("Linie", key="modern_border_fill")
+
+theme = get_dynamic_theme(THEMES[theme_name], template_name)
+if template_name == "Modern":
+    theme["primary"] = st.session_state.modern_header_fill
+    theme["accent"] = st.session_state.modern_sidebar_fill
+    theme["border"] = st.session_state.modern_border_fill
 inject_custom_css(theme)
 
 st.markdown('<div class="page-title">Lebenslauf / CV Builder</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="page-subtitle">professionelle Lebensläufe mit Live-Vorschau.</div>',
-    unsafe_allow_html=True
+    '<div class="page-subtitle">Professionelle Lebenslaeufe mit Live-Vorschau.</div>',
+    unsafe_allow_html=True,
 )
 
 with st.sidebar:
     st.markdown("---")
-    st.subheader("Einträge")
+    st.subheader("Eintraege")
 
     if st.button("+ Berufserfahrung hinzufügen"):
         st.session_state.experience_count += 1
 
-    if st.session_state.experience_count > 1:
-        if st.button("- Berufserfahrung entfernen"):
-            st.session_state.experience_count -= 1
+    if st.session_state.experience_count > 1 and st.button("- Berufserfahrung entfernen"):
+        st.session_state.experience_count -= 1
 
     if st.button("+ Ausbildung hinzufügen"):
         st.session_state.education_count += 1
 
-    if st.session_state.education_count > 1:
-        if st.button("- Ausbildung entfernen"):
-            st.session_state.education_count -= 1
+    if st.session_state.education_count > 1 and st.button("- Ausbildung entfernen"):
+        st.session_state.education_count -= 1
 
     if st.button("+ Kenntnis hinzufügen"):
         st.session_state.skill_count += 1
 
-    if st.session_state.skill_count > 1:
-        if st.button("- Kenntnis entfernen"):
-            st.session_state.skill_count -= 1
+    if st.session_state.skill_count > 1 and st.button("- Kenntnis entfernen"):
+        st.session_state.skill_count -= 1
+
+    if st.button("+ Sprache hinzufügen"):
+        st.session_state.language_count += 1
+
+    if st.session_state.language_count > 1 and st.button("- Sprache entfernen"):
+        st.session_state.language_count -= 1
+
+    if st.button("+ Projekt hinzufügen"):
+        st.session_state.project_count += 1
+
+    if st.session_state.project_count > 1 and st.button("- Projekt entfernen"):
+        st.session_state.project_count -= 1
+
+    if st.button("+ Zertifikat hinzufügen"):
+        st.session_state.certificate_count += 1
+
+    if st.session_state.certificate_count > 1 and st.button("- Zertifikat entfernen"):
+        st.session_state.certificate_count -= 1
 
     st.markdown("---")
 
-    json_upload = st.file_uploader(
-        tr(language, "load_json"),
-        type=["json"]
-    )
+    st.subheader("Profil weiterbearbeiten")
+    st.caption("Lade hier eine zuvor in dieser App gespeicherte JSON-, DOCX- oder PDF-Datei hoch.")
+    json_upload = st.file_uploader(tr(ui_language, "load_json"), type=["json", "docx", "pdf"])
 
     if json_upload is not None:
         os.makedirs("temp", exist_ok=True)
-        temp_json_path = os.path.join("temp", "import_profile.json")
-        with open(temp_json_path, "wb") as f:
-            f.write(json_upload.read())
+        upload_name = json_upload.name or "import_profile"
+        upload_ext = os.path.splitext(upload_name)[1].lower() or ".json"
+        temp_upload_path = os.path.join("temp", f"import_profile{upload_ext}")
+        with open(temp_upload_path, "wb") as file_obj:
+            file_obj.write(json_upload.read())
 
-        loaded_profile = load_profile_from_json(temp_json_path)
-        fill_session_from_profile(loaded_profile)
-        st.success("JSON-Profil geladen.")
+        try:
+            if upload_ext == ".json":
+                loaded_profile = load_profile_from_json(temp_upload_path)
+            elif upload_ext == ".docx":
+                loaded_profile = extract_profile_from_docx(temp_upload_path)
+            elif upload_ext == ".pdf":
+                loaded_profile = extract_profile_from_pdf(temp_upload_path)
+            else:
+                raise ValueError("Nicht unterstuetztes Dateiformat.")
+        except Exception as exc:
+            st.error(f"Profil konnte nicht geladen werden: {exc}")
+        else:
+            st.session_state["pending_loaded_profile"] = profile_to_dict(loaded_profile)
+            st.rerun()
 
-    st.info("Tipp: Für ATS möglichst kein Foto verwenden.")
+    st.info("Tipp: Fuer ATS moeglichst kein Foto verwenden.")
 
 left_col, middle_col, right_col = st.columns([0.95, 1.05, 1.25])
 
 with left_col:
     st.markdown('<div class="form-card">', unsafe_allow_html=True)
-    st.subheader(tr(language, "personal_data"))
+    st.subheader(tr(ui_language, "personal_data"))
 
     name = st.text_input("Name", key="name")
-    job_title = st.text_input(tr(language, "job_title"), key="job_title")
-    email = st.text_input(tr(language, "email"), key="email")
-    phone = st.text_input(tr(language, "phone"), key="phone")
-    city = st.text_input(tr(language, "city"), key="city")
-    linkedin = st.text_input(tr(language, "linkedin"), key="linkedin")
-    summary = st.text_area(tr(language, "summary"), height=130, key="summary")
-    st.markdown('</div>', unsafe_allow_html=True)
+    job_title = st.text_input(tr(ui_language, "job_title"), key="job_title")
+    email = st.text_input(tr(ui_language, "email"), key="email")
+    phone = st.text_input(tr(ui_language, "phone"), key="phone")
+    city = st.text_input(tr(ui_language, "city"), key="city")
+    linkedin = st.text_input(tr(ui_language, "linkedin"), key="linkedin")
+    summary = st.text_area(tr(ui_language, "summary"), height=130, key="summary")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="form-card">', unsafe_allow_html=True)
-    st.subheader(tr(language, "photo"))
+    st.subheader(tr(ui_language, "photo"))
 
-    uploaded_photo = st.file_uploader(
-        "PNG / JPG / JPEG",
-        type=["png", "jpg", "jpeg"]
-    )
-    photo_path = save_uploaded_photo(uploaded_photo)
-    st.session_state["photo_path"] = photo_path
+    uploaded_photo = st.file_uploader("PNG / JPG / JPEG", type=["png", "jpg", "jpeg"])
+    st.session_state["photo_path"] = save_uploaded_photo(uploaded_photo)
 
     if st.session_state["photo_path"]:
         try:
@@ -374,59 +627,105 @@ with left_col:
         except Exception:
             pass
 
-    st.subheader(tr(language, "other_sections"))
+    st.subheader(tr(ui_language, "other_sections"))
     st.markdown("**Kenntnisse mit Niveau**")
 
     skill_entries = []
-
     for i in range(st.session_state.skill_count):
-        c1, c2 = st.columns([1.4, 1])
+        col_1, col_2 = st.columns([1.4, 1])
 
-        with c1:
+        with col_1:
             skill_name = st.text_input("Kenntnis", key=f"skill_name_{i}")
 
-        with c2:
+        with col_2:
             current_level = st.session_state.get(f"skill_level_{i}", "Gute Kenntnisse")
             level_index = SKILL_LEVELS.index(current_level) if current_level in SKILL_LEVELS else 1
-
-            skill_level = st.selectbox(
-                "Niveau",
-                SKILL_LEVELS,
-                index=level_index,
-                key=f"skill_level_{i}"
-            )
+            skill_level = st.selectbox("Niveau", SKILL_LEVELS, index=level_index, key=f"skill_level_{i}")
 
         if skill_name.strip():
             skill_entries.append(SkillEntry(name=skill_name, level=skill_level))
 
-    languages_raw = st.text_area(
-        f"{tr(language, 'languages')} (jede Zeile = ein Punkt)",
-        height=90,
-        key="languages_raw"
-    )
-    projects_raw = st.text_area(
-        f"{tr(language, 'projects')} (jede Zeile = ein Punkt)",
-        height=90,
-        key="projects_raw"
-    )
-    certificates_raw = st.text_area(
-        f"{tr(language, 'certificates')} (jede Zeile = ein Punkt)",
-        height=90,
-        key="certificates_raw"
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown(f"**{tr(ui_language, 'languages')}**")
+    language_entries = []
+    for i in range(st.session_state.language_count):
+        col_1, col_2 = st.columns([1.4, 1])
+
+        with col_1:
+            language_name = st.text_input("Sprache", key=f"language_name_{i}")
+
+        with col_2:
+            current_level = st.session_state.get(f"language_level_{i}", "Gute Kenntnisse")
+            level_index = LANGUAGE_LEVELS.index(current_level) if current_level in LANGUAGE_LEVELS else 1
+            language_level = st.selectbox(
+                "Niveau",
+                LANGUAGE_LEVELS,
+                index=level_index,
+                key=f"language_level_{i}",
+            )
+
+        if language_name.strip():
+            language_entries.append(LanguageEntry(name=language_name, level=language_level))
+
+    st.markdown(f"**{tr(ui_language, 'projects')}**")
+    project_entries = []
+    for i in range(st.session_state.project_count):
+        with st.expander(f"{tr(ui_language, 'projects')} {i + 1}", expanded=(i == 0)):
+            project_title = st.text_input("Projektname", key=f"project_title_{i}")
+            project_organization = st.text_input("Wo gemacht? / Institution", key=f"project_organization_{i}")
+            project_period = render_period_selector("project", i, "Zeitraum / Period")
+            project_summary = st.text_area("Kurze Erklaerung", key=f"project_summary_{i}", height=90)
+
+            if (
+                project_title.strip()
+                or project_organization.strip()
+                or project_period.strip()
+                or project_summary.strip()
+            ):
+                project_entries.append(
+                    ProjectEntry(
+                        title=project_title,
+                        organization=project_organization,
+                        period=project_period,
+                        summary=project_summary.strip(),
+                    )
+                )
+
+    st.markdown(f"**{tr(ui_language, 'certificates')}**")
+    certificate_entries = []
+    for i in range(st.session_state.certificate_count):
+        with st.expander(f"{tr(ui_language, 'certificates')} {i + 1}", expanded=(i == 0)):
+            certificate_title = st.text_input("Zertifikat", key=f"certificate_title_{i}")
+            certificate_issuer = st.text_input("Anbieter / Institution", key=f"certificate_issuer_{i}")
+            certificate_period = render_period_selector("certificate", i, "Zeitraum / Period")
+            certificate_summary = st.text_area("Kurze Erklaerung", key=f"certificate_summary_{i}", height=90)
+
+            if (
+                certificate_title.strip()
+                or certificate_issuer.strip()
+                or certificate_period.strip()
+                or certificate_summary.strip()
+            ):
+                certificate_entries.append(
+                    CertificateEntry(
+                        title=certificate_title,
+                        issuer=certificate_issuer,
+                        period=certificate_period,
+                        summary=certificate_summary.strip(),
+                    )
+                )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 with middle_col:
     st.markdown('<div class="form-card">', unsafe_allow_html=True)
-    st.subheader(tr(language, "experience"))
+    st.subheader(tr(ui_language, "experience"))
     experience_entries = []
 
     for i in range(st.session_state.experience_count):
-        with st.expander(f"{tr(language, 'experience')} {i + 1}", expanded=True):
+        with st.expander(f"{tr(ui_language, 'experience')} {i + 1}", expanded=True):
             title = st.text_input("Titel / Title", key=f"exp_title_{i}")
             company = st.text_input("Firma / Company", key=f"exp_company_{i}")
             location = st.text_input("Ort / Location", key=f"exp_location_{i}")
-            period = st.text_input("Zeitraum / Period", key=f"exp_period_{i}")
+            period = render_period_selector("exp", i, "Zeitraum / Period")
             details_raw = st.text_area("Details", key=f"exp_details_{i}", height=110)
 
             if title.strip() or company.strip() or period.strip() or details_raw.strip():
@@ -440,15 +739,15 @@ with middle_col:
                     )
                 )
 
-    st.subheader(tr(language, "education"))
+    st.subheader(tr(ui_language, "education"))
     education_entries = []
 
     for i in range(st.session_state.education_count):
-        with st.expander(f"{tr(language, 'education')} {i + 1}", expanded=True):
+        with st.expander(f"{tr(ui_language, 'education')} {i + 1}", expanded=True):
             degree = st.text_input("Abschluss / Degree", key=f"edu_degree_{i}")
             school = st.text_input("Schule / Hochschule", key=f"edu_school_{i}")
             location = st.text_input("Ort / Location", key=f"edu_location_{i}")
-            period = st.text_input("Zeitraum / Period", key=f"edu_period_{i}")
+            period = render_period_selector("edu", i, "Zeitraum / Period")
             details_raw = st.text_area("Details", key=f"edu_details_{i}", height=95)
 
             if degree.strip() or school.strip() or period.strip() or details_raw.strip():
@@ -462,7 +761,7 @@ with middle_col:
                     )
                 )
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 profile = CVProfile(
     name=name,
@@ -473,14 +772,15 @@ profile = CVProfile(
     linkedin=linkedin,
     summary=summary,
     photo_path=st.session_state.get("photo_path", ""),
-    language=language,
+    language=cv_language,
     skills=skill_entries,
-    languages=split_lines(languages_raw),
-    projects=split_lines(projects_raw),
-    certificates=split_lines(certificates_raw),
+    languages=language_entries,
+    projects=project_entries,
+    certificates=certificate_entries,
     experience=experience_entries,
     education=education_entries,
 )
+profile_json_data = json.dumps(asdict(profile), ensure_ascii=False, indent=2).encode("utf-8")
 
 with right_col:
     st.markdown('<div class="preview-title">Live-Vorschau</div>', unsafe_allow_html=True)
@@ -489,10 +789,14 @@ with right_col:
 
 st.markdown("---")
 
-col_a, col_b, col_c = st.columns([1, 1, 2])
-
-generate_clicked = col_a.button(tr(language, "generate"), type="primary")
-save_json_clicked = col_b.button(tr(language, "save_json"))
+col_a, col_b, _ = st.columns([1, 1, 2])
+generate_clicked = col_a.button(tr(ui_language, "generate"), type="primary")
+col_b.download_button(
+    tr(ui_language, "save_json"),
+    data=profile_json_data,
+    file_name="cv_profile.json",
+    mime="application/json",
+)
 
 if generate_clicked:
     errors = validate_profile(profile)
@@ -502,47 +806,47 @@ if generate_clicked:
             st.error(error)
     else:
         builder = TEMPLATES[template_name]
-        doc = builder(profile)
+        if template_name == "Modern":
+            modern_colors = {
+                "header_fill": st.session_state.modern_header_fill.lstrip("#").upper(),
+                "sidebar_fill": st.session_state.modern_sidebar_fill.lstrip("#").upper(),
+                "header_line": st.session_state.modern_border_fill.lstrip("#").upper(),
+                "text_dark": DEFAULT_MODERN_COLORS["text_dark"],
+                "text_muted": DEFAULT_MODERN_COLORS["text_muted"],
+            }
+            doc = build_modern_cv(profile, modern_colors)
+        else:
+            doc = builder(profile)
 
         os.makedirs("output", exist_ok=True)
         filename = f"lebenslauf_{template_name.lower().replace(' ', '_')}.docx"
         docx_path = os.path.join("output", filename)
         doc.save(docx_path)
 
-        st.success(f"DOCX erstellt: {filename}")
-
-        with open(docx_path, "rb") as f:
-            st.download_button(
-                tr(language, "download_docx"),
-                data=f,
-                file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-
         if is_pdf_export_supported():
             try:
                 pdf_path = convert_docx_to_pdf(docx_path)
-                with open(pdf_path, "rb") as f:
+                embed_profile_in_pdf(pdf_path, profile)
+                with open(pdf_path, "rb") as file_obj:
                     st.download_button(
-                        tr(language, "download_pdf"),
-                        data=f,
+                        tr(ui_language, "download_pdf"),
+                        data=file_obj,
                         file_name=os.path.basename(pdf_path),
                         mime="application/pdf",
                     )
-            except Exception as e:
-                st.warning(f"PDF konnte nicht erstellt werden: {e}")
+            except Exception as exc:
+                st.warning(f"PDF konnte nicht erstellt werden: {exc}")
         else:
             st.info("PDF-Export ist in der Cloud nicht verfuegbar. Bitte nutze den DOCX-Download.")
 
-if save_json_clicked:
-    os.makedirs("output", exist_ok=True)
-    json_path = os.path.join("output", "cv_profile.json")
-    save_profile_to_json(profile, json_path)
+        embed_profile_in_docx(docx_path, profile)
 
-    with open(json_path, "rb") as f:
-        st.download_button(
-            "JSON herunterladen",
-            data=f,
-            file_name="cv_profile.json",
-            mime="application/json",
-        )
+        st.success(f"DOCX erstellt: {filename}")
+
+        with open(docx_path, "rb") as file_obj:
+            st.download_button(
+                tr(ui_language, "download_docx"),
+                data=file_obj,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )

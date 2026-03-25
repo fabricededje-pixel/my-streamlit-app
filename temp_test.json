@@ -1,0 +1,22 @@
+{
+  "name": "Test",
+  "job_title": "",
+  "email": "",
+  "phone": "",
+  "city": "",
+  "linkedin": "",
+  "summary": "",
+  "photo_path": "",
+  "language": "de",
+  "skills": [],
+  "languages": [
+    {
+      "name": "Deutsch",
+      "level": "Muttersprache"
+    }
+  ],
+  "projects": [],
+  "certificates": [],
+  "experience": [],
+  "education": []
+}

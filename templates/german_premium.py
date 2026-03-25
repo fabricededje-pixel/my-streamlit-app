@@ -1,10 +1,12 @@
 from docx import Document
-from docx.shared import Pt, Cm
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from core.cv_formatters import skill_strings, language_strings, premium_contact_lines
+from docx.shared import Cm, Pt
+
+from core.cv_formatters import language_strings, premium_contact_lines, skill_strings
+from core.i18n import tr
 
 
 def _set_layout(doc):
@@ -21,14 +23,13 @@ def _set_layout(doc):
 
 
 def _remove_table_borders(table):
-    tbl = table._tbl
-    tbl_pr = tbl.tblPr
+    table_props = table._tbl.tblPr
     borders = OxmlElement("w:tblBorders")
     for border_name in ("top", "left", "bottom", "right", "insideH", "insideV"):
         border = OxmlElement(f"w:{border_name}")
         border.set(qn("w:val"), "nil")
         borders.append(border)
-    tbl_pr.append(borders)
+    table_props.append(borders)
 
 
 def _add_run(paragraph, text, *, bold=False, italic=False, size=10, color=None):
@@ -39,6 +40,7 @@ def _add_run(paragraph, text, *, bold=False, italic=False, size=10, color=None):
     run.font.size = Pt(size)
     if color:
         from docx.shared import RGBColor
+
         run.font.color.rgb = RGBColor.from_string(color)
     return run
 
@@ -51,7 +53,6 @@ def _header(doc, profile):
 
     left = table.cell(0, 0)
     right = table.cell(0, 1)
-
     left.width = Cm(13.5)
     right.width = Cm(3.5)
 
@@ -59,169 +60,184 @@ def _header(doc, profile):
     first = parts[0] if parts else "Beispiel"
     rest = " ".join(parts[1:]) if len(parts) > 1 else "Name"
 
-    p_name = left.paragraphs[0]
-    p_name.paragraph_format.space_after = Pt(5)
-    _add_run(p_name, first + " ", size=26, color="374151")
-    _add_run(p_name, rest, bold=True, size=26, color="000000")
+    paragraph_name = left.paragraphs[0]
+    paragraph_name.paragraph_format.space_after = Pt(5)
+    _add_run(paragraph_name, first + " ", size=26, color="374151")
+    _add_run(paragraph_name, rest, bold=True, size=26, color="000000")
 
     if profile.job_title.strip():
-        p_job = left.add_paragraph()
-        p_job.paragraph_format.space_after = Pt(5)
-        _add_run(p_job, profile.job_title.strip(), size=11.5, color="4B5563")
+        paragraph_job = left.add_paragraph()
+        paragraph_job.paragraph_format.space_after = Pt(5)
+        _add_run(paragraph_job, profile.job_title.strip(), size=11.5, color="4B5563")
 
     line1, line2 = premium_contact_lines(profile)
-
     if line1:
-        p1 = left.add_paragraph()
-        p1.paragraph_format.space_after = Pt(1)
-        _add_run(p1, line1, size=10.5, color="374151")
+        paragraph_1 = left.add_paragraph()
+        paragraph_1.paragraph_format.space_after = Pt(1)
+        _add_run(paragraph_1, line1, size=10.5, color="374151")
 
     if line2:
-        p2 = left.add_paragraph()
-        p2.paragraph_format.space_after = Pt(0)
-        _add_run(p2, line2, size=10.5, color="374151")
+        paragraph_2 = left.add_paragraph()
+        paragraph_2.paragraph_format.space_after = Pt(0)
+        _add_run(paragraph_2, line2, size=10.5, color="374151")
 
     if profile.photo_path:
         try:
-            p_img = right.paragraphs[0]
-            p_img.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-            run_img = p_img.add_run()
-            run_img.add_picture(profile.photo_path, width=Cm(3.0))
+            paragraph_image = right.paragraphs[0]
+            paragraph_image.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            run_image = paragraph_image.add_run()
+            run_image.add_picture(profile.photo_path, width=Cm(3.0))
         except Exception:
             pass
 
 
 def _section_title(doc, title):
-    p = doc.add_paragraph()
-    p.paragraph_format.space_before = Pt(10)
-    p.paragraph_format.space_after = Pt(3)
+    paragraph = doc.add_paragraph()
+    paragraph.paragraph_format.space_before = Pt(12)
+    paragraph.paragraph_format.space_after = Pt(4)
 
-    r = p.add_run(title)
-    r.bold = True
-    r.font.name = "Arial"
-    r.font.size = Pt(15)
+    run = paragraph.add_run(title)
+    run.bold = True
+    run.font.name = "Arial"
+    run.font.size = Pt(15)
 
-    p_pr = p._element.get_or_add_pPr()
-    p_bdr = OxmlElement("w:pBdr")
+    paragraph_props = paragraph._element.get_or_add_pPr()
+    border = OxmlElement("w:pBdr")
     bottom = OxmlElement("w:bottom")
     bottom.set(qn("w:val"), "single")
     bottom.set(qn("w:sz"), "8")
     bottom.set(qn("w:space"), "2")
     bottom.set(qn("w:color"), "6B7280")
-    p_bdr.append(bottom)
-    p_pr.append(p_bdr)
+    border.append(bottom)
+    paragraph_props.append(border)
 
 
 def _entry_block(doc, title, subtitle, details, period="", location=""):
-    p1 = doc.add_paragraph()
-    p1.paragraph_format.space_after = Pt(1)
+    paragraph_top = doc.add_paragraph()
+    paragraph_top.paragraph_format.space_after = Pt(2)
 
-    left_text = title.strip()
+    run_title = paragraph_top.add_run(title.strip())
+    run_title.bold = True
+    run_title.font.name = "Arial"
+    run_title.font.size = Pt(11.5)
+
     right_text = " | ".join([x for x in [period.strip(), location.strip()] if x])
-
-    r1 = p1.add_run(left_text)
-    r1.bold = True
-    r1.font.name = "Arial"
-    r1.font.size = Pt(11.5)
-
     if right_text:
-        r2 = p1.add_run(f"    {right_text}")
-        r2.italic = True
-        r2.font.name = "Arial"
-        r2.font.size = Pt(10)
+        run_meta = paragraph_top.add_run(f"    {right_text}")
+        run_meta.italic = True
+        run_meta.font.name = "Arial"
+        run_meta.font.size = Pt(10)
 
     if subtitle:
-        p2 = doc.add_paragraph()
-        p2.paragraph_format.space_after = Pt(3)
-        r_sub = p2.add_run(subtitle.upper())
-        r_sub.font.name = "Arial"
-        r_sub.font.size = Pt(9)
+        paragraph_sub = doc.add_paragraph()
+        paragraph_sub.paragraph_format.space_after = Pt(4)
+        run_sub = paragraph_sub.add_run(subtitle.upper())
+        run_sub.font.name = "Arial"
+        run_sub.font.size = Pt(9)
 
     for item in details:
         if str(item).strip():
-            p = doc.add_paragraph(style="List Bullet")
-            p.paragraph_format.space_after = Pt(0)
-            r = p.add_run(str(item))
-            r.font.name = "Arial"
-            r.font.size = Pt(10)
+            paragraph = doc.add_paragraph(style="List Bullet")
+            paragraph.paragraph_format.space_after = Pt(1)
+            run = paragraph.add_run(str(item))
+            run.font.name = "Arial"
+            run.font.size = Pt(10)
 
 
-def _summary_block(doc, text):
+def _summary_block(doc, text, lang):
     if not text.strip():
         return
-    _section_title(doc, "Kurzprofil")
-    p = doc.add_paragraph()
-    p.paragraph_format.space_after = Pt(5)
-    r = p.add_run(text)
-    r.font.name = "Arial"
-    r.font.size = Pt(10.5)
+    _section_title(doc, tr(lang, "summary"))
+    paragraph = doc.add_paragraph()
+    paragraph.paragraph_format.space_after = Pt(6)
+    run = paragraph.add_run(text)
+    run.font.name = "Arial"
+    run.font.size = Pt(10.5)
 
 
 def _skills_line(doc, label, values):
     if not values:
         return
-    p = doc.add_paragraph()
-    p.paragraph_format.space_after = Pt(2)
+    paragraph = doc.add_paragraph()
+    paragraph.paragraph_format.space_after = Pt(3)
 
-    r1 = p.add_run(f"{label}: ")
-    r1.bold = True
-    r1.font.name = "Arial"
-    r1.font.size = Pt(10.5)
+    run_label = paragraph.add_run(f"{label}: ")
+    run_label.bold = True
+    run_label.font.name = "Arial"
+    run_label.font.size = Pt(10.5)
 
-    r2 = p.add_run(" | ".join(values))
-    r2.font.name = "Arial"
-    r2.font.size = Pt(10)
+    run_values = paragraph.add_run(" | ".join(values))
+    run_values.font.name = "Arial"
+    run_values.font.size = Pt(10)
 
 
 def build_german_premium_cv(profile):
     doc = Document()
     _set_layout(doc)
 
+    lang = profile.language
+
     _header(doc, profile)
 
     if profile.summary.strip():
-        _summary_block(doc, profile.summary.strip())
+        _summary_block(doc, profile.summary.strip(), lang)
 
     if profile.experience:
-        _section_title(doc, "Berufliche Erfahrung")
-        for e in profile.experience:
+        _section_title(doc, tr(lang, "experience"))
+        for entry in profile.experience:
             _entry_block(
                 doc,
-                title=e.title,
-                subtitle=e.company or "",
-                details=e.details,
-                period=e.period,
-                location=e.location
+                title=entry.title,
+                subtitle=entry.company or "",
+                details=entry.details,
+                period=entry.period,
+                location=entry.location,
             )
 
     if profile.education:
-        _section_title(doc, "Bildungsweg")
-        for e in profile.education:
+        _section_title(doc, tr(lang, "education"))
+        for entry in profile.education:
             _entry_block(
                 doc,
-                title=e.degree,
-                subtitle=e.school or "",
-                details=e.details,
-                period=e.period,
-                location=e.location
+                title=entry.degree,
+                subtitle=entry.school or "",
+                details=entry.details,
+                period=entry.period,
+                location=entry.location,
             )
 
     if profile.projects:
-        _section_title(doc, "Projekte")
-        for p in profile.projects:
-            _entry_block(doc, str(p), "", [], "", "")
+        _section_title(doc, tr(lang, "projects"))
+        for project in profile.projects:
+            summary = str(getattr(project, "summary", "") or "").strip()
+            _entry_block(
+                doc,
+                str(getattr(project, "title", project)),
+                getattr(project, "organization", "") or "",
+                [summary] if summary else [],
+                getattr(project, "period", "") or "",
+                "",
+            )
 
     if profile.certificates:
-        _section_title(doc, "Zertifikate")
-        for c in profile.certificates:
-            _entry_block(doc, str(c), "", [], "", "")
+        _section_title(doc, tr(lang, "certificates"))
+        for certificate in profile.certificates:
+            summary = str(getattr(certificate, "summary", "") or "").strip()
+            _entry_block(
+                doc,
+                str(getattr(certificate, "title", certificate)),
+                getattr(certificate, "issuer", "") or "",
+                [summary] if summary else [],
+                getattr(certificate, "period", "") or "",
+                "",
+            )
 
     if profile.languages or profile.skills:
-        _section_title(doc, "Fähigkeiten")
+        _section_title(doc, tr(lang, "skills"))
 
         langs = language_strings(profile.languages)
         if langs:
-            _skills_line(doc, "Sprachen", langs)
+            _skills_line(doc, tr(lang, "languages"), langs)
 
         skills = skill_strings(profile.skills)
         if skills:

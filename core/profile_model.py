@@ -33,6 +33,22 @@ class EducationEntry:
 
 
 @dataclass
+class ProjectEntry:
+    title: str = ""
+    organization: str = ""
+    period: str = ""
+    summary: str = ""
+
+
+@dataclass
+class CertificateEntry:
+    title: str = ""
+    issuer: str = ""
+    period: str = ""
+    summary: str = ""
+
+
+@dataclass
 class CVProfile:
     name: str = ""
     job_title: str = ""
@@ -46,8 +62,8 @@ class CVProfile:
 
     skills: List[SkillEntry] = field(default_factory=list)
     languages: List[LanguageEntry] = field(default_factory=list)
-    projects: List[str] = field(default_factory=list)
-    certificates: List[str] = field(default_factory=list)
+    projects: List[ProjectEntry] = field(default_factory=list)
+    certificates: List[CertificateEntry] = field(default_factory=list)
 
     experience: List[ExperienceEntry] = field(default_factory=list)
     education: List[EducationEntry] = field(default_factory=list)
